@@ -10,7 +10,7 @@ especially when TiKV or TiDB's CPU usage is the bottleneck.
 ## Motivation
 
 In the current implementation the default configuration of `grpc-concurrency`
-is `4`, so it could be a bottle-neck of TiKV under heavy load. Although we can
+is `4`, so it could be a bottleneck of TiKV under heavy load. Although we can
 increase the configuration value, or make it adaptable further, we still need
 to try best to reduce the gRPC CPU usage. With `BatchCommands` interface,
 clients can batch some requests into one request, and send them to TiKV with
@@ -45,7 +45,7 @@ message BatchCommandsResponse {
     repeated Response responses = 1;
     repeated uint64 request_ids = 2;
     // Indicates the TiKV's transport layer is in heavy load or not.
-    bool in_heavy_load = 3;
+    uint64 transport_layer_load = 3;
 
     message Response {
         oneof cmd {
@@ -75,8 +75,8 @@ And then `oneof` is used to unify requests and responses, instead of a
 `message`. Their wired protocols are almost same, but the former's generated
 code is much more better.
 
-The last thing is `in_heavy_load` in `BatchCommandsResponse`, which is used for
-TiKV can tell clients the load of TiKV is heavy or not. So clients can adjust
+The last thing is `transport_layer_load` in `BatchCommandsResponse`, which is
+used for TiKV can tell clients the current load of TiKV.  So clients can adjust
 their strategy (e.g. add some backoff to avoid little batch) to be more
 effective for TiKV.
 
@@ -86,15 +86,25 @@ The implementation in TiKV is very simple. It just extracts `Request`s from
 `BatchCommandsRequest`, dispatches them to engine layer, and then collects the
 `Response`s into `BatchCommandsResponse` and sends it to clients.
 
+### Implement in TiDB
+
+The implementation in TiDB is a little complex. One TiDB can establish many
+connections to one TiKV, and for every connection TiDB will construct a map
+to associate requests with some IDs. When send requests to TiKVs, TiDB needs
+to decide to wait for a while to collect a bigger batch or not. In our design
+it depends on TiKVs' load returned in `BatchCommandsResponse`. If it's greater
+than a configurable value, TiDB will wait 2 millisecond and then do the send.
+
 ### How TiKV knows its gRPC threads are busy
 
 TiKV gets CPU usage of gRPC threads by reading
 `/proc/<tikv-pid>/tasks/<grpc-tid>`, which is only avaliable on Linux. If gRPC
-CPU usage is greater than 80% in last 3 seconds, TiKV can tell clients it's in
-heavy load.
+CPU usage is greater than 80% in last 1 seconds, TiKV can tell clients it's
+overload.
 
 ## Drawbacks
 
-## Alternatives
-
-## Unresolved questions
+As you can see we introduce a *wait algorithm* in TiDB, which must cause a
+higher latency when the algorithm works. However a bigger batch means less
+syscalls, and then less cost on network. So we must choose the *threshold*
+carefully to avoid potential performance drops.
