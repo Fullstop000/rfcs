@@ -71,12 +71,11 @@ send a batch request to TiKV, they also need to store their `request_ids`
 somewhere, and then dispatch responses (extracted from batch responses)
 respectively to them.
 
-And then `oneof` is used to unify requests and responses, instead of a
-`message`. Their wired protocols are almost same, but the former's generated
-code is much more better.
+`oneof` is used to unify requests and responses, instead of a `message`. Their
+wired protocols are almost same, but the former's generated code is much better.
 
 The last thing is `transport_layer_load` in `BatchCommandsResponse`, which is
-used for TiKV can tell clients the current load of TiKV.  So clients can adjust
+used by TiKV to tell clients the current load of TiKV.  So clients can adjust
 their strategy (e.g. add some backoff to avoid little batch) to be more
 effective for TiKV.
 
