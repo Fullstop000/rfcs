@@ -2,7 +2,7 @@
 
 ## Summary
 
-This RFC introduces a new mechanism into Raft protocol which allows a follower to send raft logs and snapshots to other followers. The target of this feature is to reduce network transmission cost between different data centers in Log Replication.
+This RFC introduces a new mechanism for Raft protocol which allows a follower to send raft logs and snapshots to other followers. The target of this feature is to reduce network transmission cost between different data centers in Log Replication.
 
 ## Motivation
 
@@ -14,7 +14,7 @@ There are four key concepts of design:
 
 - Every peer in a Raft group is associated with a `group_id`.
 - Follower-to-follower data transfer is only allowed for peers in same group.
-- Peers report their `group_id` to their leader in Raft messages.
+- Peers report their `group_id` to their leader by Raft messages.
 - Leader is able to ask a follower to replicate data to other followers.
 
 ### The Group and Groups
@@ -33,8 +33,8 @@ The leader must be easy to know whether or not nodes belong to the same group or
 As the `Groups` is configured, the leader is able to choose a group member as a *delegate* to send entries to one or the rest group members in Log Replication, which is called Follower Replication. To implement Follower Replication, we basically need three main steps:
 
 1. The leader picks a group member as a delegate of the group.
-2. The leader tells the delegate the name list of other peers in the same group with the delegate.
-3. the delegate replicates new appended entries to those peers.
+2. When processing Log Replication to a delegate, the leader must specify peers whom the delegate should replicate logs to. And the leader never sends raft log to the specified peers.
+3. The delegate replicates entries to specified peers based on its own progress.
 
 Here is a diagram showing how Follower Replication works:
 
@@ -87,13 +87,18 @@ We can add a new field into `Message`: `BcastTargets`, which is a list of peer I
 
 You can just treat a commission as the metadata of a MsgAppend or MsgSnapshot since the `last_index` and `log_term` are set by the leader according to its progress set.
 
-Peers can know `MsgAppend` comes from a delegate or its leader, because an another field `delegate` is added in `Message`. If a peer receives a `MsgAppend` from a delegate, it needs to response both its leader and the delegate, so that both its leader and delegate can update progress for it.
+Peers can know whether a `MsgAppend` comes from a delegate or the leader according to `delegate` value in the message. If a peer receives a `MsgAppend` from a delegate, it needs to response to both the leader and the delegate to sync the `Progress` on them.
 
 ## Drawbacks
 
 1. Committing speed could be slow if `quorum` must involve peers in different data center.
-2. When handle a Raft message, a hashmap query on `map[peer_id]group_id` is introduced.
+2. When handling a Raft message, a hashmap query to get a peer's group and delegate is introduced.
+3. When a delegate is dismissed due to networking partition, the leader recovers processing Log Replication to peers in the delegate's group. But the information in `Inflights` on the delegate won't be extended by the leader. Therefore, at that time, the leader starts to send messages with a plain `Inflights`, which breaks the origin flow control. And vice versa in the situation where the leader picks a delegate.
 
 ## Alternatives
+
+In the current design, the leader not only let the delegate replicate logs to other peers but also 'delegate's the whole flow control to the delegate. We can benefit from it because of the lighter cross-data-center network transmission between the leader and peers but suffer from some issues described in **Drawbacks** section.
+
+There is an alternative design that the leader doesn't 'delegate' the flow control to the delegate. When the leader sends `BcastTargets` to the delegate, it adds the `last_index` of each member in `BcastTargets` to indicate the peer's progress from the leader's view. In this way, the messaging flow is always controlled by the leader and the `Inflights` in-consistency can be avoided.
 
 ## Unresolved questions
